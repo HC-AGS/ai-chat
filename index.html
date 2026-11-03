@@ -27,7 +27,6 @@ body {
   display: flex;
   flex-direction: column;
 }
-/* ---------- top bar ---------- */
 #topbar {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 16px;
@@ -47,7 +46,6 @@ body {
 }
 .ghost-btn:hover { color: var(--text); border-color: var(--accent); }
 .ghost-btn.tiny { padding: 2px 8px; font-size: 12px; }
-/* ---------- settings drawer ---------- */
 #settings {
   position: fixed; top: 0; left: 0; bottom: 0;
   width: min(380px, 94vw);
@@ -73,7 +71,6 @@ code {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px;
   padding: 1px 5px; font-size: 13px; font-family: ui-monospace, Consolas, monospace;
 }
-/* ---------- chat area ---------- */
 #chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #messages { flex: 1; overflow-y: auto; padding: 20px 0; }
 .welcome { max-width: 720px; margin: 14vh auto 0; text-align: center; color: var(--muted); padding: 0 20px; }
@@ -89,7 +86,6 @@ code {
 .bubble.error { border-color: var(--error); }
 .actions { margin-bottom: 6px; }
 .muted { color: var(--muted); }
-/* ---------- rendered markdown ---------- */
 .md { overflow-wrap: break-word; }
 .md p { margin: 6px 0; }
 .md pre {
@@ -102,7 +98,6 @@ code {
 .md blockquote { margin: 6px 0; padding: 4px 10px; border-left: 3px solid var(--accent); color: var(--muted); }
 .md a { color: var(--accent); }
 .md hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
-/* ---------- composer ---------- */
 #composer {
   display: flex; gap: 10px; align-items: flex-end;
   padding: 12px 16px 16px;
@@ -120,7 +115,6 @@ code {
   padding: 9px 16px; font-size: 15px; cursor: pointer;
 }
 .hidden { display: none !important; }
-/* ---------- toast ---------- */
 #toast {
   position: fixed; bottom: 24px; left: 50%;
   transform: translateX(-50%) translateY(20px);
@@ -145,24 +139,19 @@ code {
 
 <aside id="settings" class="hidden">
   <h2>设置 <button id="btn-close-settings" class="ghost-btn tiny">关闭</button></h2>
-
   <label>接口地址（已固定）</label>
   <input id="s-base" value="https://ly.77625.xyz/v1" readonly>
-  <p class="hint">已固定为 <code>https://ly.77625.xyz/v1</code>，通过 Puter.js 中继绕过浏览器 CORS。</p>
-
+  <p class="hint">已固定，通过 Puter.js 中继绕过 CORS。</p>
   <label>API Key（必填）</label>
   <input id="s-key" type="password" placeholder="sk-…">
-  <p class="hint">Key 仅保存在本机 localStorage，不会上传。填入后自动获取模型列表。</p>
-
+  <p class="hint">仅保存在本机，填入后自动获取模型。</p>
   <label>模型</label>
   <div class="row">
     <input id="s-model" placeholder="dsv4.1f">
-    <button id="btn-refresh-models" class="ghost-btn tiny" title="从服务端拉取可用模型列表">刷新</button>
+    <button id="btn-refresh-models" class="ghost-btn tiny">刷新</button>
   </div>
-
   <label>系统提示词（可选）</label>
   <textarea id="s-system" rows="2" placeholder="例如：你是一个简洁的助手。"></textarea>
-
   <label>温度 <span id="s-temp-val">0.7</span></label>
   <input id="s-temp" type="range" min="0" max="1" step="0.1" value="0.7">
 </aside>
@@ -181,30 +170,51 @@ code {
 <script src="https://js.puter.com/v2/"></script>
 <script>
 "use strict";
+
+// 增加容错：如果 localStorage 解析失败，返回空对象
+const S = {
+  get: () => {
+    try {
+      return JSON.parse(localStorage.getItem("openchat.settings") || "{}");
+    } catch (e) {
+      return {};
+    }
+  },
+  set: (o) => {
+    try {
+      localStorage.setItem("openchat.settings", JSON.stringify(o));
+    } catch (e) {}
+  },
+};
+
 const $ = (id) => document.getElementById(id);
 const settingsEl = $("settings"), messagesEl = $("messages"), inputEl = $("input"),
       sendBtn = $("btn-send"), stopBtn = $("btn-stop"), toastEl = $("toast");
 
 const FIXED_BASE = "https://ly.77625.xyz/v1";
 
-// 优先走 Puter.js 中继绕过 CORS；没有 Puter 时回退普通 fetch（可能被 CORS 拦截）
 const apiFetch = (...args) => {
   if (window.puter?.net?.fetch) return puter.net.fetch(...args);
   if (window.puter?.fetch) return puter.fetch(...args);
   return fetch(...args);
 };
 
-const S = {
-  get: () => JSON.parse(localStorage.getItem("openchat.settings") || "{}"),
-  set: (o) => localStorage.setItem("openchat.settings", JSON.stringify(o)),
-};
 let messages = [];
 let busy = false, aborter = null, toastTimer = null;
 
-/* ---------- 对话历史 ---------- */
+/* ---------- 初始化事件绑定（放在最前面防阻断） ---------- */
+$("btn-settings").onclick = () => settingsEl.classList.toggle("hidden");
+$("btn-close-settings").onclick = () => settingsEl.classList.add("hidden");
+$("btn-clear").onclick = clearChat;
+$("btn-refresh-models").onclick = refreshModels;
+sendBtn.onclick = send;
+stopBtn.onclick = () => aborter && aborter.abort();
+
+/* ---------- 工具函数 ---------- */
 function saveHistory() {
-  localStorage.setItem("openchat.history", JSON.stringify(messages));
+  try { localStorage.setItem("openchat.history", JSON.stringify(messages)); } catch(e) {}
 }
+
 function loadHistory() {
   try {
     const h = JSON.parse(localStorage.getItem("openchat.history") || "[]");
@@ -217,7 +227,6 @@ function loadHistory() {
   } catch { messages = []; }
 }
 
-/* ---------- settings ---------- */
 function loadSettings() {
   const s = S.get();
   $("s-base").value = FIXED_BASE;
@@ -229,6 +238,7 @@ function loadSettings() {
   $("s-temp-val").textContent = $("s-temp").value;
   updateBadge();
 }
+
 function saveSettings() {
   S.set({
     type: "openai",
@@ -241,6 +251,7 @@ function saveSettings() {
   updateBadge();
   toast("设置已保存");
 }
+
 function updateBadge() {
   const s = S.get(), badge = $("model-badge");
   if (s.model) { badge.textContent = s.model; badge.classList.remove("hidden"); }
@@ -254,16 +265,11 @@ function updateBadge() {
   });
 });
 
-// 填完 Key 失焦后自动拉模型
 $("s-key").addEventListener("change", () => {
   saveSettings();
   if ($("s-key").value.trim()) refreshModels();
 });
 
-$("btn-settings").onclick = () => settingsEl.classList.toggle("hidden");
-$("btn-close-settings").onclick = () => settingsEl.classList.add("hidden");
-
-/* ---------- toast ---------- */
 function toast(msg) {
   toastEl.textContent = msg;
   toastEl.classList.add("show");
@@ -271,6 +277,191 @@ function toast(msg) {
   toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2500);
 }
 
-/* ---------- markdown（零依赖迷你渲染器：先转义再替换） ---------- */
 function escapeHtml(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function renderMarkdown(src) {
+  const blocks = [];
+  src = src.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+    blocks.push("<pre><code>" + escapeHtml(code.replace(/\n$/, "")) + "</code></pre>");
+    return "\u0000B" + (blocks.length - 1) + "\u0000";
+  });
+  src = escapeHtml(src);
+  src = src.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+  src = src.replace(/^### (.*)$/gm, "<h3>$1</h3>")
+           .replace(/^## (.*)$/gm, "<h2>$1</h2>")
+           .replace(/^# (.*)$/gm, "<h1>$1</h1>")
+           .replace(/^\s*[-*] (.*)$/gm, "<ul><li>$1</li></ul>")
+           .replace(/^&gt; (.*)$/gm, "<blockquote>$1</blockquote>")
+           .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+           .replace(/(^|\W)\*([^*\n]+)\*(?=\W|$)/g, "$1<em>$2</em>")
+           .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  src = src.replace(/(<ul>.*?<\/ul>)/gs, (m) => m.replace(/<\/li><li>/g, "</li><li>"));
+  src = src.replace(/<\/li>\s*<li>/g, "</li><li>").replace(/(<ul>)([\s\S]*?)(<\/ul>)/g, (m, a, lis) => a + lis.replace(/<\/li>\s*<li>/g, "</li><li>") + "</ul>");
+  src = src.split(/\n{2,}/).map((p) =>
+    /^<(h\d|pre|ul|blockquote)/.test(p.trim()) ? p : "<p>" + p.replace(/\n/g, "<br>") + "</p>"
+  ).join("");
+  src = src.replace(/\u0000B(\d+)\u0000/g, (_, i) => blocks[+i]);
+  return src;
+}
+
+function addMsg(role, content, cls) {
+  const div = document.createElement("div");
+  div.className = "msg " + role + (cls ? " " + cls : "");
+  div.innerHTML =
+    '<div class="bubble">' + (role === "assistant"
+      ? '<div class="actions"><button class="ghost-btn tiny" data-act="copy">复制</button></div>' : "") +
+      '<div class="md"></div></div>';
+  const md = div.querySelector(".md");
+  md.innerHTML = content ? renderMarkdown(content) : "";
+  const btn = div.querySelector("[data-act=copy]");
+  if (btn) btn.onclick = () => {
+    navigator.clipboard.writeText(content).then(() => toast("已复制")).catch(()=>toast("复制失败"));
+  };
+  messagesEl.appendChild(div);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return md;
+}
+
+function clearChat() {
+  messages = [];
+  try { localStorage.removeItem("openchat.history"); } catch(e) {}
+  messagesEl.innerHTML = welcomeHtml();
+  toast("对话已清空");
+}
+
+function welcomeHtml() {
+  return '<div class="welcome"><h1>Open Chat</h1>' +
+    '<p>开源 · 零依赖 · 不绑定任何厂商</p>' +
+    '<p>点击右上角「设置」填入 API Key，系统会自动获取模型。</p></div>';
+}
+
+async function refreshModels() {
+  const key = $("s-key").value.trim() || S.get().key || "";
+  if (!key) return toast("请先填写 API Key");
+  try {
+    const res = await apiFetch(FIXED_BASE + "/models", {
+      headers: { Authorization: "Bearer " + key },
+    });
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const names = (data.data || data.models || []).map((m) => m.id || m.name).filter(Boolean);
+    if (!names.length) return toast("未找到模型");
+    $("s-model").innerHTML = names.map((n) => `<option>${n}</option>`).join("");
+    S.set({ ...S.get(), type: "openai", base: FIXED_BASE, key, model: names[0] });
+    updateBadge();
+    toast("已加载 " + names.length + " 个模型");
+  } catch (e) {
+    toast("获取模型失败：" + e.message + "（请手动填写模型名）");
+  }
+}
+
+async function* streamResponse(opts) {
+  aborter = new AbortController();
+  const { url, ...fetchOpts } = opts;
+  const res = await apiFetch(url, { ...fetchOpts, signal: aborter.signal });
+  if (!res.ok) throw new Error((await res.text().catch(() => "HTTP " + res.status)).slice(0, 300));
+  const reader = res.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, i).trim();
+      buf = buf.slice(i + 1);
+      if (!line.startsWith("data:")) continue;
+      const payload = line.slice(5).trim();
+      if (payload === "[DONE]") return;
+      try {
+        const json = JSON.parse(payload);
+        const delta =
+          json.choices?.[0]?.delta?.content ??
+          json.choices?.[0]?.message?.content ??
+          json.message?.content ??
+          "";
+        if (delta) yield delta;
+      } catch { /* 忽略不完整行 */ }
+    }
+  }
+}
+
+async function send() {
+  const text = inputEl.value.trim();
+  if (!text || busy) return;
+
+  const s = S.get();
+  const key = $("s-key").value.trim() || s.key || "";
+  const model = $("s-model").value.trim() || s.model || "";
+  if (!key) return toast("请先在设置中填写 API Key");
+  if (!model) return toast("请先获取或填写模型名称");
+
+  if (messagesEl.querySelector(".welcome")) messagesEl.innerHTML = "";
+  addMsg("user", escapeHtml(text).replace(/\n/g, "<br>"));
+  messages.push({ role: "user", content: text });
+  inputEl.value = "";
+  inputEl.style.height = "auto";
+  busy = true;
+  sendBtn.classList.add("hidden");
+  stopBtn.classList.remove("hidden");
+
+  const history = [{ role: "system", content: s.system || "You are a helpful assistant." }, ...messages];
+  const body = { model, messages: history, temperature: s.temp ?? 0.7, stream: true };
+  const opts = {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: "Bearer " + key,
+    },
+    body: JSON.stringify(body),
+    url: FIXED_BASE + "/chat/completions",
+  };
+
+  const md = addMsg("assistant", "");
+  let full = "";
+  try {
+    for await (const delta of streamResponse(opts)) {
+      full += delta;
+      md.innerHTML = renderMarkdown(full);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+    if (!full) md.innerHTML = '<span class="muted">(空响应)</span>';
+    if (full) { messages.push({ role: "assistant", content: full }); saveHistory(); }
+  } catch (e) {
+    if (e.name === "AbortError") {
+      if (full) {
+        md.innerHTML = renderMarkdown(full);
+        messages.push({ role: "assistant", content: full }); saveHistory();
+      } else { md.innerHTML = '<span class="muted">（已停止）</span>'; }
+    } else {
+      md.innerHTML = "<span style='color:var(--error)'>" + escapeHtml(e.message) + "</span>";
+    }
+  } finally {
+    busy = false; aborter = null;
+    sendBtn.classList.remove("hidden");
+    stopBtn.classList.add("hidden");
+  }
+}
+
+inputEl.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+});
+inputEl.addEventListener("input", () => {
+  inputEl.style.height = "auto";
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + "px";
+});
+
+/* ---------- 启动 ---------- */
+try {
+  messagesEl.innerHTML = welcomeHtml();
+  loadSettings();
+  loadHistory();
+  if (S.get().key) setTimeout(refreshModels, 600);
+} catch (e) {
+  console.error("初始化失败:", e);
+}
+</script>
+</body>
+</html>
